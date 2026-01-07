@@ -1,5 +1,7 @@
+# cmake-format: off
 # SPDX-FileCopyrightText: Copyright (c) 2019-2026, NVIDIA CORPORATION. SPDX-License-Identifier: Apache-2.0
 # SPDX-License-Identifier: Apache-2.0
+# cmake-format: on
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at

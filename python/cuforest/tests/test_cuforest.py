@@ -178,7 +178,9 @@ def test_classification(
 @pytest.mark.parametrize(
     "num_rounds", [unit_param(5), quality_param(10), stress_param(90)]
 )
-@pytest.mark.parametrize("max_depth", [unit_param(3), unit_param(7), stress_param(11)])
+@pytest.mark.parametrize(
+    "max_depth", [unit_param(3), unit_param(7), stress_param(11)]
+)
 def test_regression(
     device,
     n_rows,
@@ -390,7 +392,9 @@ def small_classifier_and_preds(tmpdir_factory, request):
 
     ext = "json" if request.param == "json" else "ubj"
     model_type = "xgboost_json" if request.param == "json" else "xgboost_ubj"
-    model_path = str(tmpdir_factory.mktemp("models").join(f"small_class.{ext}"))
+    model_path = str(
+        tmpdir_factory.mktemp("models").join(f"small_class.{ext}")
+    )
     bst = _build_and_save_xgboost(model_path, X, y)
     # just do within-sample since it's not an accuracy test
     dtrain = xgb.DMatrix(X, label=y)
@@ -430,7 +434,9 @@ def test_performance_hyperparameters(
         device=device,
     )
 
-    cuforest_proba = _get_numpy_array(fm.predict_proba(X, chunk_size=chunk_size))
+    cuforest_proba = _get_numpy_array(
+        fm.predict_proba(X, chunk_size=chunk_size)
+    )
     cuforest_proba = np.reshape(cuforest_proba, xgb_preds.shape)
 
     np.testing.assert_almost_equal(cuforest_proba, xgb_preds)
@@ -486,7 +492,9 @@ def to_categorical(features, n_categorical, invalid_frac, random_state):
     cat_cols = (cat_cols * rough_n_categories).astype(int)
 
     # mix categorical and numerical columns
-    new_col_idx = rng.choice(n_features, n_features, replace=False, shuffle=True)
+    new_col_idx = rng.choice(
+        n_features, n_features, replace=False, shuffle=True
+    )
     df_cols = {}
     for icol in range(n_categorical):
         col = cat_cols[:, icol]
@@ -507,7 +515,9 @@ def to_categorical(features, n_categorical, invalid_frac, random_state):
     )
     cat_cols.flat[invalid_idx] += rough_n_categories
     # mix categorical and numerical columns
-    predict_matrix = np.concatenate([cat_cols, features[:, n_categorical:]], axis=1)
+    predict_matrix = np.concatenate(
+        [cat_cols, features[:, n_categorical:]], axis=1
+    )
     predict_matrix[:, new_col_idx] = predict_matrix
 
     return fit_df, predict_matrix
@@ -564,7 +574,9 @@ def test_lightgbm(device, tmp_path, num_classes, n_categorical):
     # the positive and negative class. So we have to transform
     # cuforest_proba to compare it with gbm_proba.
     if num_classes == 2:
-        cuforest_proba = np.concatenate([1 - cuforest_proba, cuforest_proba], axis=1)
+        cuforest_proba = np.concatenate(
+            [1 - cuforest_proba, cuforest_proba], axis=1
+        )
     np.testing.assert_almost_equal(gbm_proba, cuforest_proba)
 
 
@@ -641,7 +653,9 @@ def test_predict_per_tree_with_vector_leaf(device, n_classes, tmp_path):
     skl_model.fit(X, y)
     tl_model = treelite.sklearn.import_model(skl_model)
     pred_per_tree_tl = treelite.gtil.predict_per_tree(tl_model, X)
-    fm = cuforest.load_from_sklearn(skl_model, precision="native", device=device)
+    fm = cuforest.load_from_sklearn(
+        skl_model, precision="native", device=device
+    )
 
     pred_per_tree = _get_numpy_array(fm.predict_per_tree(X))
     margin_pred = skl_model.predict_proba(X)
@@ -679,7 +693,9 @@ def test_apply(device, n_classes, tmp_path):
         xgboost_params=xgboost_params,
     )
 
-    fm = cuforest.load_model(model_path, model_type="xgboost_ubj", device=device)
+    fm = cuforest.load_model(
+        model_path, model_type="xgboost_ubj", device=device
+    )
 
     pred_leaf = _get_numpy_array(fm.apply(X).astype(np.int32))
     expected_pred_leaf = bst.predict(xgb.DMatrix(X), pred_leaf=True)
@@ -707,7 +723,9 @@ def test_missing_categorical(category_list):
         tree_annotation=treelite.model_builder.TreeAnnotation(
             num_tree=1, target_id=[0], class_id=[0]
         ),
-        postprocessor=treelite.model_builder.PostProcessorFunc(name="identity"),
+        postprocessor=treelite.model_builder.PostProcessorFunc(
+            name="identity"
+        ),
         base_scores=[0.0],
     )
     builder.start_tree()
@@ -744,7 +762,9 @@ def test_device_selection(device_id, model_kind, tmp_path):
     current_device = cp.cuda.runtime.getDevice()
 
     if device_id is not None and device_id >= cp.cuda.runtime.getDeviceCount():
-        pytest.skip(reason="device_id larger than the number of available GPU devices")
+        pytest.skip(
+            reason="device_id larger than the number of available GPU devices"
+        )
 
     n_rows = 1000
     n_columns = 30

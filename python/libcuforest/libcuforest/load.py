@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION.
 # SPDX-License-Identifier: Apache-2.0
 #
 
@@ -26,7 +26,9 @@ def _load_wheel_installation(soname: str):
 
     Returns ``None`` if the library cannot be loaded.
     """
-    if os.path.isfile(lib := os.path.join(os.path.dirname(__file__), "lib64", soname)):
+    if os.path.isfile(
+        lib := os.path.join(os.path.dirname(__file__), "lib64", soname)
+    ):
         return ctypes.CDLL(lib, PREFERRED_LOAD_FLAG)
     return None
 
