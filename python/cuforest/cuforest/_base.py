@@ -4,6 +4,11 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
+
 from cuforest._typing import DataType
 
 
@@ -100,19 +105,9 @@ class ForestInference(ABC):
     def layout(self) -> str:
         pass
 
-    @layout.setter
-    @abstractmethod
-    def layout(self, value: str):
-        pass
-
     @property
     @abstractmethod
     def default_chunk_size(self) -> Optional[int]:
-        pass
-
-    @default_chunk_size.setter
-    @abstractmethod
-    def default_chunk_size(self, value: Optional[int]):
         pass
 
     @property
@@ -141,17 +136,15 @@ class ForestInference(ABC):
         predict_method: str = "predict",
         max_chunk_size: Optional[int] = None,
         seed: int = 0,
-    ):
+    ) -> Self:
         """
         Find the optimal layout and chunk size for this model.
 
-        The optimal value for layout and chunk size depends on the model,
-        batch size, and available hardware. In order to get the most
-        realistic performance distribution, example data can be provided. If
-        it is not, random data will be generated based on the indicated batch
-        size. After finding the optimal layout, the model will be reloaded if
-        necessary. The optimal chunk size will be used to set the default chunk
-        size used if none is passed to the predict call.
+        Returns a new model instance with the optimal layout and chunk size.
+        The optimal values depend on the model, batch size, and available
+        hardware. In order to get the most realistic performance distribution,
+        example data can be provided. If it is not, random data will be
+        generated based on the indicated batch size.
 
         Parameters
         ----------
@@ -188,6 +181,11 @@ class ForestInference(ABC):
         seed : int
             The random seed used for generating example data if none is
             provided.
+
+        Returns
+        -------
+        Self
+            A new model instance with optimal layout and default_chunk_size.
         """
         pass
 

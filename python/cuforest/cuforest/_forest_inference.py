@@ -8,6 +8,11 @@ from enum import Enum
 from time import perf_counter
 from typing import Optional
 
+try:
+    from typing import Self
+except ImportError:
+    from typing_extensions import Self
+
 import numpy as np
 import treelite
 from cuda.bindings import runtime
@@ -113,7 +118,26 @@ class _AutoIterations:
 class OptimizeMixin:
     """Mixin class that provides the optimize method for ForestInference classes."""
 
-    def _optimize(
+    @classmethod
+    def _create_with_layout(
+        cls,
+        *,
+        treelite_model_bytes: bytes,
+        handle: Optional[Handle],
+        layout: str,
+        default_chunk_size: Optional[int],
+        align_bytes: Optional[int],
+        precision: Optional[str],
+        device: str,
+        device_id: int,
+    ) -> Self:
+        """Create a new instance with the specified layout and chunk size.
+
+        Subclasses must implement this method.
+        """
+        raise NotImplementedError
+
+    def optimize(
         self,
         *,
         data=None,
@@ -123,17 +147,15 @@ class OptimizeMixin:
         predict_method: str = "predict",
         max_chunk_size: Optional[int] = None,
         seed: int = 0,
-    ):
+    ) -> Self:
         """
         Find the optimal layout and chunk size for this model.
 
-        The optimal value for layout and chunk size depends on the model,
-        batch size, and available hardware. In order to get the most
-        realistic performance distribution, example data can be provided. If
-        it is not, random data will be generated based on the indicated batch
-        size. After finding the optimal layout, the model will be reloaded if
-        necessary. The optimal chunk size will be used to set the default chunk
-        size used if none is passed to the predict call.
+        Returns a new model instance with the optimal layout and chunk size.
+        The optimal values depend on the model, batch size, and available
+        hardware. In order to get the most realistic performance distribution,
+        example data can be provided. If it is not, random data will be
+        generated based on the indicated batch size.
 
         Parameters
         ----------
@@ -170,6 +192,11 @@ class OptimizeMixin:
         seed : int
             The random seed used for generating example data if none is
             provided.
+
+        Returns
+        -------
+        Self
+            A new model instance with optimal layout and default_chunk_size.
         """
         is_gpu = self.forest.device == "gpu"
 
@@ -205,9 +232,7 @@ class OptimizeMixin:
 
         max_chunk_size = min(max_chunk_size, batch_size)
 
-        infer = getattr(self, predict_method)
-
-        optimal_layout = "depth_first"
+        optimal_layout = self.layout
         optimal_chunk_size = 1
 
         valid_layouts = ("depth_first", "breadth_first", "layered")
@@ -216,6 +241,23 @@ class OptimizeMixin:
         while chunk_size <= max_chunk_size:
             valid_chunk_sizes.append(chunk_size)
             chunk_size *= 2
+
+        # Create test instances for each layout (reuse self for current layout)
+        test_instances = {}
+        for layout in valid_layouts:
+            if layout == self.layout:
+                test_instances[layout] = self
+            else:
+                test_instances[layout] = type(self)._create_with_layout(
+                    treelite_model_bytes=self.forest.treelite_model_bytes,
+                    handle=self.forest.handle,
+                    layout=layout,
+                    default_chunk_size=None,
+                    align_bytes=self.forest.align_bytes,
+                    precision=self.forest.precision,
+                    device=self.forest.device,
+                    device_id=self.forest.device_id,
+                )
 
         all_params = list(itertools.product(valid_layouts, valid_chunk_sizes))
         auto_iterator = _AutoIterations()
@@ -226,8 +268,8 @@ class OptimizeMixin:
             iterations = auto_iterator.next()
 
             for layout, chunk_size in all_params:
-                # Set layout (triggers model reload if changed)
-                self.layout = layout
+                instance = test_instances[layout]
+                infer = getattr(instance, predict_method)
 
                 # Warmup run
                 infer(data[0], chunk_size=chunk_size)
@@ -248,12 +290,21 @@ class OptimizeMixin:
             if perf_counter() - loop_start > timeout:
                 break
 
-        self.layout = optimal_layout
-        self.default_chunk_size = optimal_chunk_size
+        # Return a new instance with optimal settings
+        return type(self)._create_with_layout(
+            treelite_model_bytes=self.forest.treelite_model_bytes,
+            handle=self.forest.handle,
+            layout=optimal_layout,
+            default_chunk_size=optimal_chunk_size,
+            align_bytes=self.forest.align_bytes,
+            precision=self.forest.precision,
+            device=self.forest.device,
+            device_id=self.forest.device_id,
+        )
 
 
 class CPUForestInferenceClassifier(
-    ForestInferenceClassifier, ClassifierMixin, OptimizeMixin
+    OptimizeMixin, ForestInferenceClassifier, ClassifierMixin
 ):
     def __init__(
         self,
@@ -271,6 +322,30 @@ class CPUForestInferenceClassifier(
             treelite_model=treelite_model,
             device="cpu",
             device_id=-1,
+            handle=handle,
+            layout=layout,
+            default_chunk_size=default_chunk_size,
+            align_bytes=align_bytes,
+            precision=precision,
+        )
+
+    @classmethod
+    def _create_with_layout(
+        cls,
+        *,
+        treelite_model_bytes: bytes,
+        handle: Optional[Handle],
+        layout: str,
+        default_chunk_size: Optional[int],
+        align_bytes: Optional[int],
+        precision: Optional[str],
+        device: str,
+        device_id: int,
+    ) -> Self:
+        """Create a new instance with the specified layout and chunk size."""
+        tl_model = treelite.Model.deserialize_bytes(treelite_model_bytes)
+        return cls(
+            treelite_model=tl_model,
             handle=handle,
             layout=layout,
             default_chunk_size=default_chunk_size,
@@ -312,27 +387,6 @@ class CPUForestInferenceClassifier(
     ) -> DataType:
         return self.forest.apply(X, chunk_size=chunk_size)
 
-    def optimize(
-        self,
-        *,
-        data=None,
-        batch_size: int = 1024,
-        unique_batches: int = 10,
-        timeout: float = 0.2,
-        predict_method: str = "predict",
-        max_chunk_size: Optional[int] = None,
-        seed: int = 0,
-    ):
-        self._optimize(
-            data=data,
-            batch_size=batch_size,
-            unique_batches=unique_batches,
-            timeout=timeout,
-            predict_method=predict_method,
-            max_chunk_size=max_chunk_size,
-            seed=seed,
-        )
-
     @property
     def num_outputs(self) -> int:
         return self.forest.num_outputs
@@ -353,20 +407,12 @@ class CPUForestInferenceClassifier(
     def default_chunk_size(self) -> Optional[int]:
         return self.forest.default_chunk_size
 
-    @default_chunk_size.setter
-    def default_chunk_size(self, value: Optional[int]):
-        self.forest.default_chunk_size = value
-
     @property
     def layout(self) -> str:
         return self.forest.layout
 
-    @layout.setter
-    def layout(self, value: str):
-        self.forest.layout = value
 
-
-class CPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
+class CPUForestInferenceRegressor(OptimizeMixin, ForestInferenceRegressor):
     def __init__(
         self,
         *,
@@ -383,6 +429,30 @@ class CPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
             treelite_model=treelite_model,
             device="cpu",
             device_id=-1,
+            handle=handle,
+            layout=layout,
+            default_chunk_size=default_chunk_size,
+            align_bytes=align_bytes,
+            precision=precision,
+        )
+
+    @classmethod
+    def _create_with_layout(
+        cls,
+        *,
+        treelite_model_bytes: bytes,
+        handle: Optional[Handle],
+        layout: str,
+        default_chunk_size: Optional[int],
+        align_bytes: Optional[int],
+        precision: Optional[str],
+        device: str,
+        device_id: int,
+    ) -> Self:
+        """Create a new instance with the specified layout and chunk size."""
+        tl_model = treelite.Model.deserialize_bytes(treelite_model_bytes)
+        return cls(
+            treelite_model=tl_model,
             handle=handle,
             layout=layout,
             default_chunk_size=default_chunk_size,
@@ -414,27 +484,6 @@ class CPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
     ) -> DataType:
         return self.forest.apply(X, chunk_size=chunk_size)
 
-    def optimize(
-        self,
-        *,
-        data=None,
-        batch_size: int = 1024,
-        unique_batches: int = 10,
-        timeout: float = 0.2,
-        predict_method: str = "predict",
-        max_chunk_size: Optional[int] = None,
-        seed: int = 0,
-    ):
-        self._optimize(
-            data=data,
-            batch_size=batch_size,
-            unique_batches=unique_batches,
-            timeout=timeout,
-            predict_method=predict_method,
-            max_chunk_size=max_chunk_size,
-            seed=seed,
-        )
-
     @property
     def num_outputs(self) -> int:
         return self.forest.num_outputs
@@ -455,21 +504,13 @@ class CPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
     def default_chunk_size(self) -> Optional[int]:
         return self.forest.default_chunk_size
 
-    @default_chunk_size.setter
-    def default_chunk_size(self, value: Optional[int]):
-        self.forest.default_chunk_size = value
-
     @property
     def layout(self) -> str:
         return self.forest.layout
-
-    @layout.setter
-    def layout(self, value: str):
-        self.forest.layout = value
 
 
 class GPUForestInferenceClassifier(
-    ForestInferenceClassifier, ClassifierMixin, OptimizeMixin
+    OptimizeMixin, ForestInferenceClassifier, ClassifierMixin
 ):
     def __init__(
         self,
@@ -493,6 +534,31 @@ class GPUForestInferenceClassifier(
             default_chunk_size=default_chunk_size,
             align_bytes=align_bytes,
             precision=precision,
+        )
+
+    @classmethod
+    def _create_with_layout(
+        cls,
+        *,
+        treelite_model_bytes: bytes,
+        handle: Optional[Handle],
+        layout: str,
+        default_chunk_size: Optional[int],
+        align_bytes: Optional[int],
+        precision: Optional[str],
+        device: str,
+        device_id: int,
+    ) -> Self:
+        """Create a new instance with the specified layout and chunk size."""
+        tl_model = treelite.Model.deserialize_bytes(treelite_model_bytes)
+        return cls(
+            treelite_model=tl_model,
+            handle=handle,
+            layout=layout,
+            default_chunk_size=default_chunk_size,
+            align_bytes=align_bytes,
+            precision=precision,
+            device_id=device_id,
         )
 
     def predict(
@@ -529,27 +595,6 @@ class GPUForestInferenceClassifier(
     ) -> DataType:
         return self.forest.apply(X, chunk_size=chunk_size)
 
-    def optimize(
-        self,
-        *,
-        data=None,
-        batch_size: int = 1024,
-        unique_batches: int = 10,
-        timeout: float = 0.2,
-        predict_method: str = "predict",
-        max_chunk_size: Optional[int] = None,
-        seed: int = 0,
-    ):
-        self._optimize(
-            data=data,
-            batch_size=batch_size,
-            unique_batches=unique_batches,
-            timeout=timeout,
-            predict_method=predict_method,
-            max_chunk_size=max_chunk_size,
-            seed=seed,
-        )
-
     @property
     def num_outputs(self) -> int:
         return self.forest.num_outputs
@@ -570,20 +615,12 @@ class GPUForestInferenceClassifier(
     def default_chunk_size(self) -> Optional[int]:
         return self.forest.default_chunk_size
 
-    @default_chunk_size.setter
-    def default_chunk_size(self, value: Optional[int]):
-        self.forest.default_chunk_size = value
-
     @property
     def layout(self) -> str:
         return self.forest.layout
 
-    @layout.setter
-    def layout(self, value: str):
-        self.forest.layout = value
 
-
-class GPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
+class GPUForestInferenceRegressor(OptimizeMixin, ForestInferenceRegressor):
     def __init__(
         self,
         *,
@@ -606,6 +643,31 @@ class GPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
             default_chunk_size=default_chunk_size,
             align_bytes=align_bytes,
             precision=precision,
+        )
+
+    @classmethod
+    def _create_with_layout(
+        cls,
+        *,
+        treelite_model_bytes: bytes,
+        handle: Optional[Handle],
+        layout: str,
+        default_chunk_size: Optional[int],
+        align_bytes: Optional[int],
+        precision: Optional[str],
+        device: str,
+        device_id: int,
+    ) -> Self:
+        """Create a new instance with the specified layout and chunk size."""
+        tl_model = treelite.Model.deserialize_bytes(treelite_model_bytes)
+        return cls(
+            treelite_model=tl_model,
+            handle=handle,
+            layout=layout,
+            default_chunk_size=default_chunk_size,
+            align_bytes=align_bytes,
+            precision=precision,
+            device_id=device_id,
         )
 
     def predict(
@@ -632,27 +694,6 @@ class GPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
     ) -> DataType:
         return self.forest.apply(X, chunk_size=chunk_size)
 
-    def optimize(
-        self,
-        *,
-        data=None,
-        batch_size: int = 1024,
-        unique_batches: int = 10,
-        timeout: float = 0.2,
-        predict_method: str = "predict",
-        max_chunk_size: Optional[int] = None,
-        seed: int = 0,
-    ):
-        self._optimize(
-            data=data,
-            batch_size=batch_size,
-            unique_batches=unique_batches,
-            timeout=timeout,
-            predict_method=predict_method,
-            max_chunk_size=max_chunk_size,
-            seed=seed,
-        )
-
     @property
     def num_outputs(self) -> int:
         return self.forest.num_outputs
@@ -673,14 +714,6 @@ class GPUForestInferenceRegressor(ForestInferenceRegressor, OptimizeMixin):
     def default_chunk_size(self) -> Optional[int]:
         return self.forest.default_chunk_size
 
-    @default_chunk_size.setter
-    def default_chunk_size(self, value: Optional[int]):
-        self.forest.default_chunk_size = value
-
     @property
     def layout(self) -> str:
         return self.forest.layout
-
-    @layout.setter
-    def layout(self, value: str):
-        self.forest.layout = value
