@@ -266,9 +266,7 @@ set_target_properties(
              POSITION_INDEPENDENT_CODE ON
              INTERFACE_POSITION_INDEPENDENT_CODE ON)
 
-target_compile_definitions(
-  ${NVFOREST_CPP_TARGET}
-  PRIVATE NVFOREST_CPP_API)
+target_compile_definitions(${NVFOREST_CPP_TARGET} PRIVATE NVFOREST_CPP_API)
 
 target_compile_options(${NVFOREST_CPP_TARGET} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${NVFOREST_CXX_FLAGS}>"
                                                       "$<$<COMPILE_LANGUAGE:CUDA>:${NVFOREST_CUDA_FLAGS}>")
